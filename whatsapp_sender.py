@@ -1,244 +1,137 @@
-import time
 import logging
 import os
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
+import requests
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-PROFILE_DIR = os.path.expanduser("~") + "/whatsapp_chrome_profile"
+# Получаем из переменных окружения
+INSTANCE_ID = os.environ.get("GREEN_API_INSTANCE_ID", "")
+INSTANCE_TOKEN = os.environ.get("GREEN_API_TOKEN", "")
+BASE_URL = f"https://api.green-api.com/waInstance{INSTANCE_ID}"
+
 
 class WhatsAppSender:
-    _driver = None
-    
+
     @classmethod
     def init(cls):
-        """Инициализация Chromium и WhatsApp Web"""
-        if cls._driver is not None:
-            try:
-                cls._driver.quit()
-            except:
-                pass
-        
-        logger.info("🚀 Запуск Chromium для WhatsApp Web...")
-        
-        chrome_options = Options()
-        chrome_options.add_argument("--user-data-dir=" + PROFILE_DIR)
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_argument("--disable-notifications")
-        chrome_options.add_argument("--remote-allow-origins=*")
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920x1080")
-        
-        # Используем системный Chromium
-        service = Service(executable_path="/usr/bin/chromedriver")
-        cls._driver = webdriver.Chrome(service=service, options=chrome_options)
-        cls._driver.get("https://web.whatsapp.com")
-        
-        logger.info("⏳ Ожидание авторизации WhatsApp...")
-        cls._wait_for_whatsapp_ready()
-        logger.info("✅ WhatsApp Web готов к работе!")
-    
-    @classmethod
-    def _ensure_driver(cls):
-        """Проверка, что драйвер существует и активен"""
-        if cls._driver is None:
-            logger.warning("⚠️ Драйвер не инициализирован, пересоздаём...")
-            cls.init()
-            return True
-        
+        """Проверка подключения к Green API"""
+        if not INSTANCE_ID or not INSTANCE_TOKEN:
+            raise ValueError(
+                "❌ Не заданы GREEN_API_INSTANCE_ID и GREEN_API_TOKEN"
+            )
+
         try:
-            cls._driver.current_url
-            return True
+            url = f"{BASE_URL}/getStateInstance/{INSTANCE_TOKEN}"
+            response = requests.get(url, timeout=10)
+            data = response.json()
+
+            state = data.get("stateInstance", "unknown")
+            logger.info(f"📱 Green API статус: {state}")
+
+            if state == "authorized":
+                logger.info("✅ WhatsApp авторизован и готов!")
+            elif state == "notAuthorized":
+                logger.warning(
+                    "⚠️ WhatsApp не авторизован!\n"
+                    "Перейдите в личный кабинет Green API "
+                    "и отсканируйте QR-код."
+                )
+            else:
+                logger.warning(f"⚠️ Неизвестный статус: {state}")
+
         except Exception as e:
-            logger.warning(f"⚠️ Драйвер неактивен: {e}, пересоздаём...")
-            cls.init()
-            return True
-    
-    @classmethod
-    def _wait_for_whatsapp_ready(cls, timeout_seconds=120):
-        """Ожидание авторизации"""
-        start_time = time.time()
-        
-        while time.time() - start_time < timeout_seconds:
-            try:
-                time.sleep(2)
-                elements = cls._driver.find_elements(By.CSS_SELECTOR, "#side, div[title='New chat'], div[aria-label='Chat list']")
-                if elements:
-                    logger.info("✅ Авторизация подтверждена!")
-                    time.sleep(3)
-                    return
-            except Exception:
-                pass
-        
-        raise Exception("❌ WhatsApp Web не авторизован за 2 минуты")
-    
+            logger.error(f"❌ Ошибка подключения к Green API: {e}")
+            raise
+
     @classmethod
     def send_message(cls, phone: str, text: str) -> bool:
-        """Отправка сообщения в WhatsApp"""
-        cls._ensure_driver()
+        """
+        Отправка сообщения через Green API
         
-        clean_phone = ''.join(ch for ch in phone if ch.isdigit() or ch == '+')
-        phone_for_url = clean_phone[1:] if clean_phone.startswith('+') else clean_phone
+        Args:
+            phone: номер в формате +79XXXXXXXXX
+            text: текст сообщения
+            
+        Returns:
+            True если успешно, False если ошибка
+        """
+        if not INSTANCE_ID or not INSTANCE_TOKEN:
+            logger.error("❌ Green API не настроен")
+            return False
+
+        # Форматируем номер: убираем + и добавляем @c.us
+        clean_phone = ''.join(ch for ch in phone if ch.isdigit())
         
-        logger.info(f"📤 Отправка WhatsApp → {clean_phone}")
+        # Убираем ведущую 8, заменяем на 7
+        if clean_phone.startswith('8') and len(clean_phone) == 11:
+            clean_phone = '7' + clean_phone[1:]
         
+        chat_id = f"{clean_phone}@c.us"
+
+        logger.info(f"📤 Отправка WhatsApp → {phone} (chat_id: {chat_id})")
+
         try:
-            url = f"https://web.whatsapp.com/send?phone={phone_for_url}&text={cls._encode_url(text)}"
-            cls._driver.get(url)
-            time.sleep(8)
+            url = f"{BASE_URL}/sendMessage/{INSTANCE_TOKEN}"
             
-            if cls._is_phone_not_on_whatsapp():
-                logger.warning(f"❌ Номер {clean_phone} не зарегистрирован в WhatsApp")
-                cls._close_error_dialog()
-                cls._driver.get("https://web.whatsapp.com")
-                time.sleep(2)
-                return False
+            payload = {
+                "chatId": chat_id,
+                "message": text
+            }
             
-            input_box = cls._find_input_box()
-            if not input_box:
-                logger.warning("❌ Поле ввода не найдено")
-                cls._driver.get("https://web.whatsapp.com")
-                time.sleep(2)
-                return False
-            
-            input_box.click()
-            time.sleep(1)
-            input_box.clear()
-            input_box.send_keys(text)
-            time.sleep(1)
-            input_box.send_keys(Keys.ENTER)
-            logger.info("✓ Сообщение отправлено")
-            
-            time.sleep(3)
-            cls._wait_for_message_sent()
-            
-            cls._driver.get("https://web.whatsapp.com")
-            time.sleep(2)
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка отправки: {e}")
-            try:
-                cls._driver.get("https://web.whatsapp.com")
-                time.sleep(3)
-            except:
-                pass
-            return False
-    
-    @classmethod
-    def _find_input_box(cls):
-        """Поиск поля ввода сообщения"""
-        if cls._driver is None:
-            return None
-            
-        selectors = [
-            "div[contenteditable='true'][data-tab='10']",
-            "div[contenteditable='true'][data-tab='6']",
-            "div[contenteditable='true'][data-tab='97']",
-            "footer div[contenteditable='true']",
-            "div[role='textbox'][contenteditable='true']",
-            "div[contenteditable='true']"
-        ]
-        
-        for selector in selectors:
-            try:
-                wait = WebDriverWait(cls._driver, 8)
-                element = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
-                if element:
-                    logger.info(f"✅ Поле ввода найдено")
-                    return element
-            except Exception:
-                continue
-        
-        try:
-            elements = cls._driver.find_elements(By.CSS_SELECTOR, "div[contenteditable='true']")
-            if elements:
-                logger.info("✅ Поле ввода найдено (запасной вариант)")
-                return elements[-1]
-        except:
-            pass
-        
-        return None
-    
-    @classmethod
-    def _wait_for_message_sent(cls, timeout=20):
-        """Ожидание подтверждения отправки"""
-        if cls._driver is None:
-            return False
-            
-        sent_selectors = [
-            "span[data-icon='msg-check']",
-            "span[data-icon='msg-dblcheck']",
-            "span[data-icon='msg-dblcheck-ack']",
-            "div[class*='message-out']"
-        ]
-        
-        for selector in sent_selectors:
-            try:
-                wait = WebDriverWait(cls._driver, timeout)
-                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
-                logger.info("✅ Подтверждение отправки получено")
-                return True
-            except Exception:
-                continue
-        
-        return True
-    
-    @classmethod
-    def _is_phone_not_on_whatsapp(cls) -> bool:
-        """Проверка, есть ли номер в WhatsApp"""
-        if cls._driver is None:
-            return False
-            
-        error_texts = [
-            "не пользуется WhatsApp",
-            "not on WhatsApp",
-            "Invalid phone number",
-            "Недействительный номер телефона"
-        ]
-        
-        for text in error_texts:
-            try:
-                elements = cls._driver.find_elements(By.XPATH, f"//*[contains(text(),'{text}')]")
-                if elements:
+            headers = {
+                "Content-Type": "application/json"
+            }
+
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+
+            logger.info(f"📡 Ответ API: {response.status_code} — {response.text}")
+
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Green API возвращает idMessage при успехе
+                if "idMessage" in data:
+                    logger.info(
+                        f"✅ Сообщение отправлено! ID: {data['idMessage']}"
+                    )
                     return True
-            except Exception:
-                continue
-        return False
-    
+                else:
+                    logger.warning(f"⚠️ Неожиданный ответ: {data}")
+                    return False
+            else:
+                logger.error(
+                    f"❌ Ошибка API: {response.status_code} — {response.text}"
+                )
+                return False
+
+        except requests.exceptions.Timeout:
+            logger.error("❌ Таймаут запроса к Green API")
+            return False
+        except requests.exceptions.ConnectionError:
+            logger.error("❌ Ошибка соединения с Green API")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Неожиданная ошибка: {e}")
+            return False
+
     @classmethod
-    def _close_error_dialog(cls):
-        """Закрытие диалога ошибки"""
-        if cls._driver is None:
-            return
+    def get_status(cls) -> str:
+        """Получить текущий статус подключения"""
         try:
-            buttons = cls._driver.find_elements(By.XPATH, "//div[@role='button'][contains(.,'OK') or contains(.,'Ок')]")
-            if buttons:
-                buttons[0].click()
-        except Exception:
-            pass
-    
-    @staticmethod
-    def _encode_url(text: str) -> str:
-        import urllib.parse
-        return urllib.parse.quote(text)
-    
+            url = f"{BASE_URL}/getStateInstance/{INSTANCE_TOKEN}"
+            response = requests.get(url, timeout=10)
+            data = response.json()
+            return data.get("stateInstance", "unknown")
+        except Exception as e:
+            return f"error: {e}"
+
     @classmethod
     def shutdown(cls):
-        if cls._driver:
-            logger.info("🔴 Закрываем браузер...")
-            try:
-                cls._driver.quit()
-            except:
-                pass
-            cls._driver = None
+        """Заглушка для совместимости с main.py"""
+        logger.info("✅ WhatsApp Sender остановлен")
