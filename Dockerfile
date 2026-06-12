@@ -10,15 +10,13 @@ RUN apt-get update && apt-get install -y \
     chromium-driver \
     && rm -rf /var/lib/apt/lists/*
 
-# Установка переменных окружения для Chrome
-ENV CHROME_BIN=/usr/bin/chromium
-ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
-
+# Установка Python зависимостей
 WORKDIR /app
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Копирование кода
 COPY . .
 
+# Запуск
 CMD ["python", "main.py"]
