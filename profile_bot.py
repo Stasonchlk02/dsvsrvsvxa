@@ -73,6 +73,31 @@ class ProfileBot:
             "Пример: +79123456789 Привет, это тестовое сообщение"
         )
 
+    # Добавить в класс ProfileBot:
+
+async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка статуса WhatsApp"""
+    chat_id = update.effective_chat.id
+    if chat_id != ADMIN_CHAT_ID:
+        return
+    
+    status = WhatsAppSender.get_status()
+    
+    status_messages = {
+        "authorized": "✅ WhatsApp подключён и готов",
+        "notAuthorized": "❌ WhatsApp не авторизован (нужен QR-код)",
+        "blocked": "🚫 Аккаунт заблокирован",
+        "sleepMode": "😴 Режим сна (норма)",
+        "starting": "⏳ Запускается...",
+    }
+    
+    text = status_messages.get(status, f"❓ Статус: {status}")
+    await update.message.reply_text(f"📱 Статус WhatsApp:\n{text}")
+
+
+# В функции main() добавить обработчик:
+# application.add_handler(CommandHandler("status", bot.status))
+
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
